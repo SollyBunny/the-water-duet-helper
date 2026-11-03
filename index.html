@@ -29,6 +29,7 @@
                 max-width: 75ch;
                 margin: auto;
                 position: relative;
+                padding-bottom: 6em;
             }
 
             h1, h2 {
@@ -71,10 +72,32 @@
                     padding-right: var(--padding);
                     cursor: pointer;
                 }
-                .track-peaks {
+                .track-wave {
+                    position: relative;
                     flex-grow: 1;
-                    background: var(--waveform);
+                    min-width: 0;
                     border-radius: var(--padding);
+                    background: var(--waveform);
+                    overflow: hidden;
+                }
+                    .track-peaks {
+                        display: block;
+                        width: 100%;
+                        height: 100%;
+                        cursor: pointer;
+                    }
+                    .track-playhead {
+                        position: absolute;
+                        top: 0;
+                        bottom: 0;
+                        left: 0;
+                        width: 2px;
+                        background: #fff;
+                        box-shadow: 0 0 7px #fff9;
+                        pointer-events: none;
+                    }
+                .track-error .track-path {
+                    color: #ff9b9b;
                 }
 
             #player {
@@ -89,21 +112,56 @@
                 padding: var(--padding);
                 gap: var(--padding);
                 display: flex;
+                align-items: center;
             }
                 #player-button {
                     background: none;
                     outline: none;
                     border: none;
+                    color: var(--text);
+                    font: inherit;
+                    font-weight: 700;
+                    width: 6ch;
+                    flex: none;
+                    text-align: center;
                     cursor: pointer;
+                }
+                #player-button:disabled {
+                    color: var(--muted);
+                    cursor: wait;
                 }
                 #player-seek {
                     flex-grow: 1;
                 }
+                #player-time {
+                    color: var(--muted);
+                    font-size: 0.85rem;
+                    font-variant-numeric: tabular-nums;
+                    white-space: nowrap;
+                }
+
+            #lyrics h3 {
+                margin: 1.2em 0 0.2em;
+                font-size: 0.8rem;
+                letter-spacing: 0.08em;
+                text-transform: uppercase;
+                color: var(--muted);
+            }
+            #lyrics div {
+                padding: 0.1em 0;
+            }
+
+            .hint {
+                margin: 0.5em var(--padding);
+                color: var(--muted);
+                font-size: 0.85rem;
+            }
         </style>
     </head>
     <body>
         <main>
             <h1>Multitrack audio</h1>
+            <p class="hint">Click a waveform to seek. Each track has its own volume slider.</p>
             <section id="tracks" aria-label="Audio tracks">
                 <p>Loading tracks...</p>
             </section>
@@ -112,8 +170,9 @@
                 <p>Loading lyrics...</p>
             </section>
             <section id="player">
-                <button id="player-button">Play</button>
-                <input id="player-seek" type="range" value="0" min="0" max="1000">
+                <button id="player-button" disabled aria-pressed="false">Play</button>
+                <input id="player-seek" type="range" value="0" min="0" max="1000" aria-label="Seek" disabled>
+                <span id="player-time">0:00 / 0:00</span>
             </section>
         </main>
         <script src="index.mjs" type="module"></script>

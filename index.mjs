@@ -1,122 +1,369 @@
-/** @type {{ name: string, path: string, context: CanvasRenderingContext2D, audio: HTMLAudioElement, peaks: Float32Array, peaksLoading: false }[]} */
-let tracks = [];
+/**
+ * @typedef {{
+ *   name: string,
+ *   path: string,
+ *   row: HTMLDivElement,
+ *   pathEl: HTMLSpanElement,
+ *   canvas: HTMLCanvasElement,
+ *   context: CanvasRenderingContext2D,
+ *   head: HTMLDivElement,
+ *   volume: number,
+ *   buffer: AudioBuffer | null,
+ *   peaks: Float32Array | null,
+ *   gain: GainNode | null,
+ *   source: AudioBufferSourceNode | null,
+ * }} Track
+ */
+
+/** @type {Track[]} */
+const tracks = [];
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-/**
- * @param {typeof tracks[number]} track
- */
-async function drawPeaks(track) {
-    if (track.peaksLoading) return;
-    const ctx = track.context;
-    let width, height;
-    {
-        const dpr = window.devicePixelRatio || 1;
-        const bounding = ctx.canvas.getBoundingClientRect();
-        width = ctx.canvas.width = Math.max(1, Math.round(bounding.width * dpr));
-        height = ctx.canvas.height = Math.max(1, Math.round(bounding.height * dpr));
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    }
-    ctx.clearRect(0, 0, width, height);
+const tracksEl = document.getElementById("tracks");
+const playButton = document.getElementById("player-button");
+const seekSlider = document.getElementById("player-seek");
+const timeEl = document.getElementById("player-time");
 
-    const peaks = track.peaks;
-    const mid = height / 2, step = width / peaks.length;
-    ctx.fillStyle = "#8495ff";
-    for (let i = 0; i < peaks.length; i++) {
-        const amp = Math.max(1, peaks[i] * (height * 0.44));
-        ctx.fillRect(i * step, mid - amp, Math.max(1, step * 0.72), amp * 2);
-    }
-}
+let duration = 0;
+let playing = false;
+/** Audio-context time at which playback was scheduled to start. */
+let startedAt = 0;
+/** Position playback starts from, and the position while paused. */
+let offset = 0;
+let frame = 0;
+let resumeAfterSeek = false;
 
-async function loadPeaks(track) {
-    if (track.peaksLoading) return;
-    track.peaksLoading = true;
+const fmt = (seconds) => {
+    seconds = Math.max(0, Math.floor(seconds || 0));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+};
 
-    const res = await fetch(track.path);
-    const audio = await audioContext.decodeAudioData(await res.arrayBuffer());
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-    const data = audio.getChannelData(0);
-    const count = 128;
+/** @param {AudioBuffer} buffer */
+function computePeaks(buffer, count = 2048) {
+    const data = buffer.getChannelData(0);
     const peaks = new Float32Array(count);
+    const block = data.length / count;
 
-    const block = Math.ceil(data.length / count);
     for (let i = 0; i < count; i++) {
-        const start = i * block;
-        const end = Math.min(data.length, start + block);
+        const start = Math.floor(i * block);
+        const end = Math.min(data.length, Math.floor((i + 1) * block));
         let peak = 0;
 
         for (let j = start; j < end; j++) {
-            const v = data[j];
-            const abs = v < 0 ? -v : v;
+            const value = data[j];
+            const abs = value < 0 ? -value : value;
             if (abs > peak) peak = abs;
         }
 
         peaks[i] = peak;
     }
 
-    track.peaks = peaks;
-    track.peaksLoading = false;
+    return peaks;
+}
+
+/** @param {Track} track */
+function drawPeaks(track) {
+    const { canvas, context: ctx, peaks } = track;
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    const pixelWidth = Math.round(width * dpr);
+    const pixelHeight = Math.round(height * dpr);
+
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+    }
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    if (!peaks) return;
+
+    const mid = height / 2;
+    // One bar per ~3 CSS pixels keeps the waveform readable on any width.
+    const bars = Math.max(1, Math.floor(width / 3));
+    const stride = peaks.length / bars;
+    const barWidth = Math.max(1, (width / bars) * 0.72);
+    const barSpace = width / bars;
+
+    ctx.fillStyle = "#8495ff";
+
+    for (let i = 0; i < bars; i++) {
+        const start = Math.floor(i * stride);
+        const end = Math.min(peaks.length, Math.max(start + 1, Math.floor((i + 1) * stride)));
+        let peak = 0;
+
+        for (let j = start; j < end; j++) {
+            if (peaks[j] > peak) peak = peaks[j];
+        }
+
+        const amp = Math.max(1, peak * (height * 0.44));
+        ctx.fillRect(i * barSpace, mid - amp, barWidth, amp * 2);
+    }
+}
+
+/** @param {Track} track */
+async function loadTrack(track) {
+    const res = await fetch(track.path);
+    if (!res.ok) throw new Error(`Could not fetch ${track.path} (${res.status})`);
+
+    const buffer = await audioContext.decodeAudioData(await res.arrayBuffer());
+    const gain = audioContext.createGain();
+    gain.gain.value = track.volume;
+    gain.connect(audioContext.destination);
+
+    track.buffer = buffer;
+    track.peaks = computePeaks(buffer);
+    track.gain = gain;
     drawPeaks(track);
 }
 
+function currentTime() {
+    if (!playing) return offset;
+    return Math.min(duration, offset + Math.max(0, audioContext.currentTime - startedAt));
+}
+
+function stopSources() {
+    for (const track of tracks) {
+        if (!track.source) continue;
+        try {
+            track.source.stop();
+        } catch (_) {}
+        track.source.disconnect();
+        track.source = null;
+    }
+}
+
+function updateButton() {
+    playButton.textContent = playing ? "Pause" : "Play";
+    playButton.setAttribute("aria-pressed", String(playing));
+}
+
+/** @param {number} time */
+function seekTo(time) {
+    offset = clamp(time, 0, duration);
+
+    if (offset >= duration) {
+        playing = false;
+        stopSources();
+        cancelAnimationFrame(frame);
+        updateButton();
+        render();
+        return;
+    }
+
+    if (playing) {
+        playing = false;
+        stopSources();
+        cancelAnimationFrame(frame);
+        play();
+    } else {
+        render();
+    }
+}
+
+function render() {
+    const time = currentTime();
+    const ratio = duration ? clamp(time / duration, 0, 1) : 0;
+
+    seekSlider.value = String(Math.round(ratio * Number(seekSlider.max)));
+    if (timeEl) timeEl.textContent = `${fmt(time)} / ${fmt(duration)}`;
+
+    for (const track of tracks) {
+        track.head.style.left = `${ratio * 100}%`;
+    }
+}
+
+function tick() {
+    if (!playing) return;
+
+    if (currentTime() >= duration) {
+        playing = false;
+        offset = duration;
+        stopSources();
+        updateButton();
+        render();
+        return;
+    }
+
+    render();
+    frame = requestAnimationFrame(tick);
+}
+
+async function play() {
+    if (playing || duration <= 0) return;
+
+    await audioContext.resume();
+    stopSources();
+
+    // Give every source the same start time so the tracks stay in sync.
+    const startAt = audioContext.currentTime + 0.05;
+
+    for (const track of tracks) {
+        if (!track.buffer || !track.gain) continue;
+        if (offset >= track.buffer.duration) continue;
+
+        const source = audioContext.createBufferSource();
+        source.buffer = track.buffer;
+        source.connect(track.gain);
+        source.start(startAt, offset);
+        track.source = source;
+    }
+
+    startedAt = startAt;
+    playing = true;
+    updateButton();
+    cancelAnimationFrame(frame);
+    tick();
+}
+
+function pause() {
+    if (!playing) return;
+
+    offset = currentTime();
+    playing = false;
+    stopSources();
+    cancelAnimationFrame(frame);
+    updateButton();
+    render();
+}
+
+playButton.addEventListener("click", () => {
+    if (playing) {
+        pause();
+    } else {
+        // After reaching the end, Play starts over from the beginning.
+        if (offset >= duration) offset = 0;
+        play();
+    }
+});
+
+seekSlider.addEventListener("input", () => {
+    const value = Number(seekSlider.value);
+    if (playing) {
+        resumeAfterSeek = true;
+        pause();
+    }
+    offset = (value / Number(seekSlider.max)) * duration;
+    render();
+});
+
+seekSlider.addEventListener("change", () => {
+    if (!resumeAfterSeek) return;
+    resumeAfterSeek = false;
+    if (offset < duration) play();
+});
+
 async function loadTracks() {
     const res = await fetch("./data/index.json");
-    tracks = Object.entries((await res.json()).files).map(([name, path]) => ({
-        name,
-        path: "./data/" + path,
-    }));
+    if (!res.ok) throw new Error(`Could not fetch index.json (${res.status})`);
+
+    const manifest = await res.json();
+    const entries = Object.entries(manifest.files ?? manifest);
+    if (!entries.length) throw new Error("No audio files listed in index.json.");
 
     const fragment = document.createDocumentFragment();
 
-    for (const track of tracks) {
-        const el = document.createElement("div");
-        fragment.append(el);
-        el.classList.add("track");
+    for (let [name, path] of entries) {
+        path = "./data/" + path;
+
+        const row = document.createElement("div");
+        row.classList.add("track");
 
         const elInfo = document.createElement("div");
-        el.append(elInfo);
         elInfo.classList.add("track-info");
-        {
-            const elName = document.createElement("span");
-            elInfo.append(elName);
-            elName.classList.add("track-name");
-            elName.textContent = track.name;
+        row.append(elInfo);
 
-            const elPath = document.createElement("span");
-            elInfo.append(elPath);
-            elPath.classList.add("track-path");
-            elPath.textContent = track.path;
-        }
+        const elName = document.createElement("span");
+        elName.classList.add("track-name");
+        elName.textContent = name;
+        elInfo.append(elName);
+
+        const elPath = document.createElement("span");
+        elPath.classList.add("track-path");
+        elPath.textContent = path;
+        elInfo.append(elPath);
 
         const elVolume = document.createElement("input");
-        el.append(elVolume);
         elVolume.classList.add("track-volume");
         elVolume.type = "range";
-        elVolume.orient = "vertical";
         elVolume.min = "0";
         elVolume.max = "100";
         elVolume.value = "100";
+        elVolume.setAttribute("aria-label", `${name} volume`);
+        row.append(elVolume);
+
+        const elWave = document.createElement("div");
+        elWave.classList.add("track-wave");
+        row.append(elWave);
 
         const elPeaks = document.createElement("canvas");
-        el.append(elPeaks);
         elPeaks.classList.add("track-peaks");
         elPeaks.textContent = "Your browser doesn't support canvas";
+        elWave.append(elPeaks);
 
-        track.context = elPeaks.getContext("2d");
-        track.context.element = elPeaks;
-        track.audio = new Audio(track.path);
+        const elHead = document.createElement("div");
+        elHead.classList.add("track-playhead");
+        elWave.append(elHead);
+
+        /** @type {Track} */
+        const track = {
+            name,
+            path,
+            row,
+            pathEl: elPath,
+            canvas: elPeaks,
+            context: elPeaks.getContext("2d"),
+            head: elHead,
+            volume: 1,
+            buffer: null,
+            peaks: null,
+            gain: null,
+            source: null,
+        };
+        tracks.push(track);
+
+        elVolume.addEventListener("input", () => {
+            track.volume = Number(elVolume.value) / 100;
+            if (track.gain) track.gain.gain.value = track.volume;
+        });
+
+        elWave.addEventListener("click", (event) => {
+            const rect = elWave.getBoundingClientRect();
+            seekTo(((event.clientX - rect.left) / rect.width) * duration);
+        });
+
+        fragment.append(row);
     }
 
-    document.getElementById("tracks").replaceChildren(fragment);
+    tracksEl.replaceChildren(fragment);
 
-    for (const track of tracks)
-        loadPeaks(track);
-    window.addEventListener("resize", () => {
-        for (const track of tracks)
-            drawPeaks(track);
-    })
+    const results = await Promise.allSettled(tracks.map(loadTrack));
+
+    for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        if (result.status === "rejected") {
+            const track = tracks[i];
+            track.row.classList.add("track-error");
+            track.pathEl.textContent = `${track.path} — ${result.reason?.message ?? result.reason}`;
+            console.error(`Could not load ${track.path}`, result.reason);
+        }
+    }
+
+    duration = tracks.reduce((max, track) => Math.max(max, track.buffer?.duration ?? 0), 0);
+
+    if (duration <= 0) {
+        throw new Error("None of the audio files could be loaded.");
+    }
+
+    playButton.disabled = false;
+    seekSlider.disabled = false;
+    updateButton();
+    render();
 }
-
 
 async function loadLyrics() {
     const res = await fetch("./data/lyrics.txt");
@@ -143,5 +390,24 @@ async function loadLyrics() {
     document.getElementById("lyrics").replaceChildren(fragment);
 }
 
-loadTracks();
-loadLyrics();
+let resizeFrame = 0;
+window.addEventListener("resize", () => {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = requestAnimationFrame(() => {
+        for (const track of tracks) drawPeaks(track);
+    });
+});
+
+loadTracks().catch((error) => {
+    console.error(error);
+    const el = document.createElement("p");
+    el.textContent = `Could not load tracks: ${error.message}`;
+    tracksEl.replaceChildren(el);
+});
+
+loadLyrics().catch((error) => {
+    console.error(error);
+    const el = document.createElement("p");
+    el.textContent = `Could not load lyrics: ${error.message}`;
+    document.getElementById("lyrics").replaceChildren(el);
+});
