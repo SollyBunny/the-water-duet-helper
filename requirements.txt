@@ -1,0 +1,11 @@
+# Install PyTorch from the CPU wheel index first (smaller/faster on CPU-only hosts):
+#   uv pip install --index-url https://download.pytorch.org/whl/cpu torch torchaudio
+torch>=2.0
+torchaudio>=2.0
+
+aiohttp>=3.9
+asteroid>=0.7
+asteroid-filterbanks>=0.4
+demucs>=4.0
+numpy>=1.24
+soundfile>=0.12
