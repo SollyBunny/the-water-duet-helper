@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Duet Helper</title>
+        <style>
+            :root {
+                --bg: #101218;
+                --panel: #191e29;
+                --line: #2b3342;
+                --muted: #9aa5b5;
+                --accent: #8b9cff;
+                --text: #eef2f8;
+                --waveform: #111620;
+                --border: 2px solid var(--line);
+                --padding: 1em;
+            }
+            body {
+                margin: 0;
+                padding: 32px 20px;
+                color-scheme: dark;
+                background: var(--bg);
+                color:var(--text);
+                font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
+            }
+
+            main {
+                max-width: 75ch;
+                margin: auto;
+                position: relative;
+            }
+
+            h1, h2 {
+                margin: 0;
+            }
+
+            input {
+                accent-color: var(--accent);
+            }
+
+            .track {
+                background: var(--panel);
+                border: var(--border);
+                margin: var(--padding);
+                border-radius: var(--padding);
+                padding: var(--padding);
+                display: flex;
+                gap: var(--padding);
+                height: 5rem;
+            }
+                .track-info {
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    min-width: 20ch;
+                }
+                    .track-name {
+                        font-weight: 900;
+                    }
+                    .track-path {
+                        color: var(--muted);
+                        font-size: 0.8rem;
+                    }
+                .track-volume {
+                    writing-mode: vertical-lr;
+                    direction: rtl;
+                    appearance: slider-vertical;
+                    width: 16px;
+                    vertical-align: bottom;
+                    padding-right: var(--padding);
+                    cursor: pointer;
+                }
+                .track-peaks {
+                    flex-grow: 1;
+                    background: var(--waveform);
+                    border-radius: var(--padding);
+                }
+
+            #player {
+                left: 50%;
+                transform: translateX(-50%);
+                width: min(50ch, calc(100% - 40px));
+                box-sizing: border-box;
+                position: fixed;
+                background: var(--panel);
+                bottom: var(--padding);
+                border-radius: var(--padding);
+                padding: var(--padding);
+                gap: var(--padding);
+                display: flex;
+            }
+                #player-button {
+                    background: none;
+                    outline: none;
+                    border: none;
+                    cursor: pointer;
+                }
+                #player-seek {
+                    flex-grow: 1;
+                }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>Multitrack audio</h1>
+            <section id="tracks" aria-label="Audio tracks">
+                <p>Loading tracks...</p>
+            </section>
+            <h2>Lyrics</h2>
+            <section id="lyrics">
+                <p>Loading lyrics...</p>
+            </section>
+            <section id="player">
+                <button id="player-button">Play</button>
+                <input id="player-seek" type="range" value="0" min="0" max="1000">
+            </section>
+        </main>
+        <script src="index.mjs" type="module"></script>
+    </body>
+</html>
