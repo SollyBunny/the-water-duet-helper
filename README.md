@@ -7,7 +7,7 @@ result in the browser.
 
 ```
 client/          static browser client (served at /)
-output/<name>/   generated tracks (served at /output/<name>/...)
+output/<name>/   generated tracks + optional lyrics.txt (served at /output/<name>/...)
 voice-sep/       Demucs + MedleyVox separation pipeline and model weights
 server.py        HTTP + WebSocket server
 .venv/           Python environment
@@ -36,7 +36,8 @@ Models download automatically on first run:
 ```
 
 Open <http://localhost:8000/>. The client loads `output/the-water` by default;
-use `?output=<name>` to load another output.
+use `?output=<name>` to load another output. Lyrics are read from
+`output/<name>/lyrics.txt` when present.
 
 ## HTTP API
 

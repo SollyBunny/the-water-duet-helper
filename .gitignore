@@ -3,8 +3,11 @@ __pycache__/
 *.py[cod]
 *.part
 
-# Generated at runtime
-output/
+# Generated at runtime (keep the demo lyrics)
+output/*
+!output/the-water/
+output/the-water/*
+!output/the-water/lyrics.txt
 uploads/
 
 # Large model weights (downloaded automatically)

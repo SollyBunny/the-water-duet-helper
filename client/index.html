@@ -8,173 +8,422 @@
             :root {
                 --bg: #101218;
                 --panel: #191e29;
+                --panel-2: #141924;
                 --line: #2b3342;
                 --muted: #9aa5b5;
                 --accent: #8b9cff;
+                --good: #67d99b;
+                --warn: #e9c46a;
+                --bad: #ff8f8f;
                 --text: #eef2f8;
                 --waveform: #111620;
                 --border: 2px solid var(--line);
                 --padding: 1em;
             }
+            * { box-sizing: border-box; }
+            [hidden] { display: none !important; }
             body {
                 margin: 0;
-                padding: 32px 20px;
                 color-scheme: dark;
                 background: var(--bg);
-                color:var(--text);
-                font:15px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;
+                color: var(--text);
+                font: 15px/1.45 system-ui, -apple-system, Segoe UI, sans-serif;
+            }
+            button, input { font: inherit; }
+            button { color: inherit; }
+
+            .app {
+                display: grid;
+                grid-template-columns: 22rem minmax(0, 1fr);
+                min-height: 100vh;
             }
 
-            main {
-                max-width: 75ch;
-                margin: auto;
-                position: relative;
-                padding-bottom: 6em;
+            .sidebar {
+                position: sticky;
+                top: 0;
+                height: 100vh;
+                overflow: auto;
+                padding: 1.5rem 1rem 2rem;
+                background: var(--panel-2);
+                border-right: 1px solid var(--line);
+            }
+            .brand h1 { margin: 0; font-size: 1.35rem; }
+            .brand p { margin: 0.4rem 0 1.2rem; }
+
+            .hint {
+                color: var(--muted);
+                font-size: 0.85rem;
             }
 
-            h1, h2 {
-                margin: 0;
-            }
-
-            input {
-                accent-color: var(--accent);
-            }
-
-            .track {
+            .upload {
+                display: flex;
+                flex-direction: column;
+                gap: 0.65rem;
+                padding: var(--padding);
                 background: var(--panel);
                 border: var(--border);
-                margin: var(--padding);
                 border-radius: var(--padding);
-                padding: var(--padding);
+            }
+            .file-drop {
+                display: block;
+                padding: 0.8rem;
+                border: 1px dashed var(--line);
+                border-radius: 0.7rem;
+                color: var(--muted);
+                text-align: center;
+                cursor: pointer;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .file-drop:hover { border-color: var(--accent); color: var(--text); }
+            .field {
+                display: flex;
+                flex-direction: column;
+                gap: 0.25rem;
+                font-size: 0.8rem;
+                color: var(--muted);
+            }
+            .field input {
+                padding: 0.55rem 0.65rem;
+                color: var(--text);
+                background: var(--bg);
+                border: 1px solid var(--line);
+                border-radius: 0.55rem;
+                outline: none;
+            }
+            .field input:focus { border-color: var(--accent); }
+            .upload button[type="submit"] {
+                padding: 0.6rem;
+                color: #111522;
+                background: var(--accent);
+                border: 0;
+                border-radius: 0.55rem;
+                font-weight: 700;
+                cursor: pointer;
+            }
+            .upload button[type="submit"]:disabled {
+                opacity: 0.55;
+                cursor: wait;
+            }
+            .error {
+                margin: 0;
+                color: var(--bad);
+                font-size: 0.8rem;
+            }
+
+            .outputs-head {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                margin: 1.5rem 0 0.6rem;
+            }
+            .outputs-head h2 { margin: 0; font-size: 0.95rem; }
+            .connection {
+                font-size: 0.75rem;
+                color: var(--muted);
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+            }
+            .connection.live { color: var(--good); }
+            .connection.offline { color: var(--bad); }
+
+            .outputs {
+                display: flex;
+                flex-direction: column;
+                gap: 0.45rem;
+                margin: 0;
+                padding: 0;
+                list-style: none;
+            }
+            .output {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto;
+                gap: 0.15rem 0.4rem;
+                padding: 0.55rem 0.6rem;
+                background: var(--panel);
+                border: 1px solid transparent;
+                border-radius: 0.65rem;
+            }
+            .output.selected {
+                border-color: var(--accent);
+                background: #1d2433;
+            }
+            .output-select {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 0.5rem;
+                min-width: 0;
+                padding: 0;
+                background: none;
+                border: 0;
+                text-align: left;
+                cursor: pointer;
+            }
+            .output-name {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-weight: 600;
+            }
+            .output-status {
+                flex: none;
+                padding: 0.05rem 0.4rem;
+                border-radius: 999px;
+                background: var(--line);
+                color: var(--muted);
+                font-size: 0.68rem;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+            }
+            .output-status.complete { color: #0e1a13; background: var(--good); }
+            .output-status.processing,
+            .output-status.queued { color: #17130a; background: var(--warn); }
+            .output-status.error { color: #1d0e0e; background: var(--bad); }
+            .output-status.incomplete,
+            .output-status.deleting { color: #1d0e0e; background: var(--warn); }
+            .output-delete {
+                grid-row: 1;
+                grid-column: 2;
+                padding: 0.1rem 0.25rem;
+                color: var(--muted);
+                background: none;
+                border: 0;
+                cursor: pointer;
+                font-size: 0.75rem;
+            }
+            .output-delete:hover { color: var(--bad); }
+            .output-bar {
+                grid-column: 1 / -1;
+                height: 3px;
+                overflow: hidden;
+                background: var(--line);
+                border-radius: 999px;
+            }
+            .output-bar-fill {
+                width: 0;
+                height: 100%;
+                background: var(--accent);
+                border-radius: inherit;
+                transition: width 0.25s ease;
+            }
+            .output.complete .output-bar-fill { background: var(--good); }
+            .output.error .output-bar-fill { background: var(--bad); }
+
+            .main {
+                width: 100%;
+                max-width: 78ch;
+                margin: 0 auto;
+                padding: 2rem 1.25rem 8em;
+            }
+            .main h2 { margin: 0 0 0.4rem; }
+
+            .empty {
+                display: grid;
+                place-items: center;
+                min-height: 45vh;
+                color: var(--muted);
+                text-align: center;
+            }
+
+            .status-panel {
+                padding: 1.25rem;
+                background: var(--panel);
+                border: var(--border);
+                border-radius: var(--padding);
+            }
+            .status-panel[data-tone="error"] { border-color: #5b2a2a; }
+            .status-panel[data-tone="warn"] { border-color: #5b4d2a; }
+            .status-panel .progress {
+                height: 8px;
+                margin: 1rem 0 0.5rem;
+                overflow: hidden;
+                background: var(--line);
+                border-radius: 999px;
+            }
+            .progress-bar {
+                width: 0;
+                height: 100%;
+                background: var(--accent);
+                border-radius: inherit;
+                transition: width 0.25s ease;
+            }
+            .status-panel[data-tone="error"] .progress-bar { background: var(--bad); }
+            .status-panel[data-tone="warn"] .progress-bar { background: var(--warn); }
+
+            .view-head { margin-bottom: 0.75rem; }
+
+            .track {
                 display: flex;
                 gap: var(--padding);
                 height: 5rem;
-            }
-                .track-info {
-                    display: flex;
-                    flex-direction: column;
-                    justify-content: center;
-                    min-width: 20ch;
-                }
-                    .track-name {
-                        font-weight: 900;
-                    }
-                    .track-path {
-                        color: var(--muted);
-                        font-size: 0.8rem;
-                    }
-                .track-volume {
-                    writing-mode: vertical-lr;
-                    direction: rtl;
-                    appearance: slider-vertical;
-                    width: 16px;
-                    vertical-align: bottom;
-                    padding-right: var(--padding);
-                    cursor: pointer;
-                }
-                .track-wave {
-                    position: relative;
-                    flex-grow: 1;
-                    min-width: 0;
-                    border-radius: var(--padding);
-                    background: var(--waveform);
-                    overflow: hidden;
-                }
-                    .track-peaks {
-                        display: block;
-                        width: 100%;
-                        height: 100%;
-                        cursor: pointer;
-                    }
-                    .track-playhead {
-                        position: absolute;
-                        top: 0;
-                        bottom: 0;
-                        left: 0;
-                        width: 2px;
-                        background: #fff;
-                        box-shadow: 0 0 7px #fff9;
-                        pointer-events: none;
-                    }
-                .track-error .track-path {
-                    color: #ff9b9b;
-                }
-
-            #player {
-                left: 50%;
-                transform: translateX(-50%);
-                width: min(50ch, calc(100% - 40px));
-                box-sizing: border-box;
-                position: fixed;
-                background: var(--panel);
-                bottom: var(--padding);
-                border-radius: var(--padding);
+                margin: var(--padding) 0;
                 padding: var(--padding);
-                gap: var(--padding);
-                display: flex;
-                align-items: center;
+                background: var(--panel);
+                border: var(--border);
+                border-radius: var(--padding);
             }
-                #player-button {
-                    background: none;
-                    outline: none;
-                    border: none;
-                    color: var(--text);
-                    font: inherit;
-                    font-weight: 700;
-                    width: 6ch;
-                    flex: none;
-                    text-align: center;
-                    cursor: pointer;
-                }
-                #player-button:disabled {
-                    color: var(--muted);
-                    cursor: wait;
-                }
-                #player-seek {
-                    flex-grow: 1;
-                }
-                #player-time {
-                    color: var(--muted);
-                    font-size: 0.85rem;
-                    font-variant-numeric: tabular-nums;
-                    white-space: nowrap;
-                }
+            .track-info {
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                min-width: 18ch;
+            }
+            .track-name { font-weight: 900; }
+            .track-path { color: var(--muted); font-size: 0.8rem; }
+            .track-volume {
+                writing-mode: vertical-lr;
+                direction: rtl;
+                appearance: slider-vertical;
+                width: 16px;
+                padding-right: var(--padding);
+                vertical-align: bottom;
+                cursor: pointer;
+            }
+            .track-wave {
+                position: relative;
+                flex-grow: 1;
+                min-width: 0;
+                overflow: hidden;
+                background: var(--waveform);
+                border-radius: var(--padding);
+            }
+            .track-peaks {
+                display: block;
+                width: 100%;
+                height: 100%;
+                cursor: pointer;
+            }
+            .track-playhead {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                width: 2px;
+                background: #fff;
+                box-shadow: 0 0 7px #fff9;
+                pointer-events: none;
+            }
+            .track-error .track-path { color: var(--bad); }
 
+            #lyrics-section { margin-top: 2rem; }
             #lyrics h3 {
                 margin: 1.2em 0 0.2em;
+                color: var(--muted);
                 font-size: 0.8rem;
                 letter-spacing: 0.08em;
                 text-transform: uppercase;
-                color: var(--muted);
             }
-            #lyrics div {
-                padding: 0.1em 0;
-            }
+            #lyrics div { padding: 0.1em 0; }
 
-            .hint {
-                margin: 0.5em var(--padding);
+            #player {
+                position: fixed;
+                left: 50%;
+                bottom: var(--padding);
+                z-index: 10;
+                display: flex;
+                align-items: center;
+                gap: var(--padding);
+                width: min(52ch, calc(100% - 40px));
+                padding: var(--padding);
+                background: var(--panel);
+                border-radius: var(--padding);
+                transform: translateX(-50%);
+            }
+            #player-button {
+                flex: none;
+                width: 6ch;
+                padding: 0;
+                color: var(--text);
+                background: none;
+                border: 0;
+                outline: none;
+                font-weight: 700;
+                text-align: center;
+                cursor: pointer;
+            }
+            #player-button:disabled { color: var(--muted); cursor: wait; }
+            #player-seek { flex-grow: 1; accent-color: var(--accent); }
+            #player-time {
                 color: var(--muted);
                 font-size: 0.85rem;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+            }
+
+            @media (max-width: 820px) {
+                .app { display: block; }
+                .sidebar {
+                    position: static;
+                    height: auto;
+                    border-right: 0;
+                    border-bottom: 1px solid var(--line);
+                }
+                .main { padding-bottom: 8em; }
             }
         </style>
     </head>
     <body>
-        <main>
-            <h1>Multitrack audio</h1>
-            <p class="hint">Click a waveform to seek. Each track has its own volume slider.</p>
-            <section id="tracks" aria-label="Audio tracks">
-                <p>Loading tracks...</p>
-            </section>
-            <h2>Lyrics</h2>
-            <section id="lyrics">
-                <p>Loading lyrics...</p>
-            </section>
-            <section id="player">
-                <button id="player-button" disabled aria-pressed="false">Play</button>
-                <input id="player-seek" type="range" value="0" min="0" max="1000" aria-label="Seek" disabled>
-                <span id="player-time">0:00 / 0:00</span>
-            </section>
-        </main>
-        <script src="index.mjs" type="module"></script>
+        <div class="app">
+            <aside class="sidebar">
+                <header class="brand">
+                    <h1>Duet Helper</h1>
+                    <p class="hint">Split a duet into two singers plus instrumental.</p>
+                </header>
+
+                <form id="upload-form" class="upload">
+                    <label class="file-drop" id="file-drop">
+                        <input id="file-input" type="file" accept="audio/*" hidden />
+                        <span id="file-label">Choose audio file</span>
+                    </label>
+                    <label class="field">
+                        <span>Output name</span>
+                        <input id="name-input" type="text" placeholder="song-name" autocomplete="off" required />
+                    </label>
+                    <button id="upload-button" type="submit">Separate</button>
+                    <p id="upload-error" class="error" hidden></p>
+                </form>
+
+                <div class="outputs-head">
+                    <h2>Outputs</h2>
+                    <span id="connection" class="connection connecting">connecting…</span>
+                </div>
+                <ul id="outputs" class="outputs" aria-label="Outputs"></ul>
+            </aside>
+
+            <main class="main">
+                <section id="empty" class="empty">
+                    <p>Select an output or upload a song to get started.</p>
+                </section>
+
+                <section id="status-panel" class="status-panel" hidden>
+                    <h2 id="status-title"></h2>
+                    <p id="status-message" class="hint"></p>
+                    <div class="progress"><div id="progress-bar" class="progress-bar"></div></div>
+                    <p id="status-detail" class="hint"></p>
+                </section>
+
+                <section id="player-view" hidden>
+                    <div class="view-head">
+                        <h2 id="track-title"></h2>
+                        <p id="track-meta" class="hint"></p>
+                    </div>
+                    <section id="tracks" aria-label="Audio tracks"></section>
+                    <section id="lyrics-section" hidden>
+                        <h2>Lyrics</h2>
+                        <div id="lyrics"></div>
+                    </section>
+                </section>
+            </main>
+        </div>
+
+        <section id="player" hidden>
+            <button id="player-button" disabled aria-pressed="false">Play</button>
+            <input id="player-seek" type="range" value="0" min="0" max="1000" aria-label="Seek" disabled />
+            <span id="player-time">0:00 / 0:00</span>
+        </section>
+
+        <script src="/index.mjs" type="module"></script>
     </body>
 </html>
