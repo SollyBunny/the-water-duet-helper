@@ -1,23 +1,18 @@
 /**
  * @typedef {{
- *   name: string,
  *   path: string,
- *   row: HTMLDivElement,
- *   pathEl: HTMLSpanElement,
  *   canvas: HTMLCanvasElement,
  *   context: CanvasRenderingContext2D,
  *   head: HTMLDivElement,
- *   volume: number,
- *   buffer: AudioBuffer | null,
+ *   audio: HTMLAudioElement,
  *   peaks: Float32Array | null,
- *   gain: GainNode | null,
- *   source: AudioBufferSourceNode | null,
  * }} Track
  */
 
 /** @type {Track[]} */
 const tracks = [];
 
+// Used only to decode audio for the waveforms; playback goes through the media elements.
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
 const tracksEl = document.getElementById("tracks");
@@ -27,12 +22,9 @@ const timeEl = document.getElementById("player-time");
 
 let duration = 0;
 let playing = false;
-/** Audio-context time at which playback was scheduled to start. */
-let startedAt = 0;
-/** Position playback starts from, and the position while paused. */
+/** Playback position while paused, and where playback starts from. */
 let offset = 0;
 let frame = 0;
-let resumeAfterSeek = false;
 
 const fmt = (seconds) => {
     seconds = Math.max(0, Math.floor(seconds || 0));
@@ -105,36 +97,67 @@ function drawPeaks(track) {
     }
 }
 
-/** @param {Track} track */
-async function loadTrack(track) {
+function updateDuration() {
+    duration = tracks.reduce((max, track) => {
+        const trackDuration = track.audio.duration;
+        return Number.isFinite(trackDuration) ? Math.max(max, trackDuration) : max;
+    }, 0);
+}
+
+/**
+ * Fetch and decode a track purely to draw its waveform. Playback uses the
+ * audio element directly, and the decoded buffer is released once the peaks
+ * are computed.
+ *
+ * @param {Track} track
+ */
+async function loadWaveform(track) {
     const res = await fetch(track.path);
-    if (!res.ok) throw new Error(`Could not fetch ${track.path} (${res.status})`);
-
     const buffer = await audioContext.decodeAudioData(await res.arrayBuffer());
-    const gain = audioContext.createGain();
-    gain.gain.value = track.volume;
-    gain.connect(audioContext.destination);
-
-    track.buffer = buffer;
     track.peaks = computePeaks(buffer);
-    track.gain = gain;
     drawPeaks(track);
+}
+
+/**
+ * Resolve once the audio element has metadata (duration), without waiting for
+ * the audio itself to load.
+ *
+ * @param {Track} track
+ */
+function loadTrackMetadata(track) {
+    const { audio } = track;
+    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) return Promise.resolve();
+
+    return new Promise((resolve) => {
+        audio.addEventListener("loadedmetadata", resolve, { once: true });
+    });
 }
 
 function currentTime() {
     if (!playing) return offset;
-    return Math.min(duration, offset + Math.max(0, audioContext.currentTime - startedAt));
+    // The longest track drives the playhead; shorter tracks stop at their end.
+    return Math.min(duration, Math.max(0, ...tracks.map((track) => track.audio.currentTime || 0)));
 }
 
-function stopSources() {
+/** @param {number} time */
+function setPositions(time) {
     for (const track of tracks) {
-        if (!track.source) continue;
-        try {
-            track.source.stop();
-        } catch (_) {}
-        track.source.disconnect();
-        track.source = null;
+        const { audio } = track;
+        if (!Number.isFinite(audio.duration)) continue;
+        audio.currentTime = clamp(time, 0, audio.duration);
     }
+}
+
+/** @param {number} [at] Position to settle on; defaults to the current playback time. */
+function pause(at = currentTime()) {
+    offset = at;
+    playing = false;
+    cancelAnimationFrame(frame);
+    for (const track of tracks) {
+        track.audio.pause();
+    }
+    updateButton();
+    render();
 }
 
 function updateButton() {
@@ -143,26 +166,16 @@ function updateButton() {
 }
 
 /** @param {number} time */
-function seekTo(time) {
+function seek(time) {
     offset = clamp(time, 0, duration);
 
     if (offset >= duration) {
-        playing = false;
-        stopSources();
-        cancelAnimationFrame(frame);
-        updateButton();
-        render();
+        pause(duration);
         return;
     }
 
-    if (playing) {
-        playing = false;
-        stopSources();
-        cancelAnimationFrame(frame);
-        play();
-    } else {
-        render();
-    }
+    setPositions(offset);
+    render();
 }
 
 function render() {
@@ -181,11 +194,7 @@ function tick() {
     if (!playing) return;
 
     if (currentTime() >= duration) {
-        playing = false;
-        offset = duration;
-        stopSources();
-        updateButton();
-        render();
+        pause(duration);
         return;
     }
 
@@ -193,78 +202,37 @@ function tick() {
     frame = requestAnimationFrame(tick);
 }
 
-async function play() {
+function play() {
     if (playing || duration <= 0) return;
 
-    await audioContext.resume();
-    stopSources();
-
-    // Give every source the same start time so the tracks stay in sync.
-    const startAt = audioContext.currentTime + 0.05;
-
-    for (const track of tracks) {
-        if (!track.buffer || !track.gain) continue;
-        if (offset >= track.buffer.duration) continue;
-
-        const source = audioContext.createBufferSource();
-        source.buffer = track.buffer;
-        source.connect(track.gain);
-        source.start(startAt, offset);
-        track.source = source;
-    }
-
-    startedAt = startAt;
+    if (offset >= duration) offset = 0;
+    setPositions(offset);
     playing = true;
     updateButton();
     cancelAnimationFrame(frame);
+
+    for (const track of tracks) {
+        track.audio.play();
+    }
+
     tick();
 }
 
-function pause() {
-    if (!playing) return;
-
-    offset = currentTime();
-    playing = false;
-    stopSources();
-    cancelAnimationFrame(frame);
-    updateButton();
-    render();
-}
-
 playButton.addEventListener("click", () => {
-    if (playing) {
+    if (playing)
         pause();
-    } else {
-        // After reaching the end, Play starts over from the beginning.
-        if (offset >= duration) offset = 0;
+    else
         play();
-    }
 });
 
 seekSlider.addEventListener("input", () => {
-    const value = Number(seekSlider.value);
-    if (playing) {
-        resumeAfterSeek = true;
-        pause();
-    }
-    offset = (value / Number(seekSlider.max)) * duration;
-    render();
-});
-
-seekSlider.addEventListener("change", () => {
-    if (!resumeAfterSeek) return;
-    resumeAfterSeek = false;
-    if (offset < duration) play();
+    seek(Number(seekSlider.value) / Number(seekSlider.max) * duration);
 });
 
 async function loadTracks() {
     const res = await fetch("./data/index.json");
-    if (!res.ok) throw new Error(`Could not fetch index.json (${res.status})`);
-
     const manifest = await res.json();
     const entries = Object.entries(manifest.files ?? manifest);
-    if (!entries.length) throw new Error("No audio files listed in index.json.");
-
     const fragment = document.createDocumentFragment();
 
     for (let [name, path] of entries) {
@@ -309,31 +277,28 @@ async function loadTracks() {
         elHead.classList.add("track-playhead");
         elWave.append(elHead);
 
+        const audio = new Audio();
+        audio.preload = "metadata";
+        audio.src = path;
+
         /** @type {Track} */
         const track = {
-            name,
             path,
-            row,
-            pathEl: elPath,
             canvas: elPeaks,
             context: elPeaks.getContext("2d"),
             head: elHead,
-            volume: 1,
-            buffer: null,
+            audio,
             peaks: null,
-            gain: null,
-            source: null,
         };
         tracks.push(track);
 
         elVolume.addEventListener("input", () => {
-            track.volume = Number(elVolume.value) / 100;
-            if (track.gain) track.gain.gain.value = track.volume;
+            audio.volume = Number(elVolume.value) / 100;
         });
 
         elWave.addEventListener("click", (event) => {
             const rect = elWave.getBoundingClientRect();
-            seekTo(((event.clientX - rect.left) / rect.width) * duration);
+            seek(((event.clientX - rect.left) / rect.width) * duration);
         });
 
         fragment.append(row);
@@ -341,28 +306,19 @@ async function loadTracks() {
 
     tracksEl.replaceChildren(fragment);
 
-    const results = await Promise.allSettled(tracks.map(loadTrack));
-
-    for (let i = 0; i < results.length; i++) {
-        const result = results[i];
-        if (result.status === "rejected") {
-            const track = tracks[i];
-            track.row.classList.add("track-error");
-            track.pathEl.textContent = `${track.path} — ${result.reason?.message ?? result.reason}`;
-            console.error(`Could not load ${track.path}`, result.reason);
-        }
-    }
-
-    duration = tracks.reduce((max, track) => Math.max(max, track.buffer?.duration ?? 0), 0);
-
-    if (duration <= 0) {
-        throw new Error("None of the audio files could be loaded.");
-    }
+    await Promise.all(tracks.map(loadTrackMetadata));
+    updateDuration();
 
     playButton.disabled = false;
     seekSlider.disabled = false;
     updateButton();
     render();
+
+    // Waveform buffers are only needed for the canvases, so decode them in the
+    // background instead of blocking playback on the whole files.
+    for (const track of tracks) {
+        loadWaveform(track);
+    }
 }
 
 async function loadLyrics() {
@@ -398,16 +354,5 @@ window.addEventListener("resize", () => {
     });
 });
 
-loadTracks().catch((error) => {
-    console.error(error);
-    const el = document.createElement("p");
-    el.textContent = `Could not load tracks: ${error.message}`;
-    tracksEl.replaceChildren(el);
-});
-
-loadLyrics().catch((error) => {
-    console.error(error);
-    const el = document.createElement("p");
-    el.textContent = `Could not load lyrics: ${error.message}`;
-    document.getElementById("lyrics").replaceChildren(el);
-});
+loadTracks();
+loadLyrics();
