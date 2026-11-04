@@ -34,13 +34,13 @@ import json
 import os
 import time
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import soundfile as sf
 import torch
-from asteroid_filterbanks import make_enc_dec
 from asteroid.masknn import TDConvNet
 from asteroid.models.base_models import (
     BaseEncoderMaskerDecoder,
@@ -48,11 +48,11 @@ from asteroid.models.base_models import (
     _unsqueeze_to_3d,
 )
 from asteroid.utils.torch_utils import jitable_shape, pad_x_to_y
+from asteroid_filterbanks import make_enc_dec
 
 SR = 24000
 MODEL_URL = (
-    "https://huggingface.co/Cyru5/MedleyVox/resolve/main/"
-    "vocals%20238/vocals.pth"
+    "https://huggingface.co/Cyru5/MedleyVox/resolve/main/vocals%20238/vocals.pth"
 )
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -78,8 +78,13 @@ _STAGE_WEIGHTS = {
 }
 
 
-def _emit(on_progress: ProgressCallback | None, stage: str, fraction: float,
-          message: str, **extra: Any) -> None:
+def _emit(
+    on_progress: ProgressCallback | None,
+    stage: str,
+    fraction: float,
+    message: str,
+    **extra: Any,
+) -> None:
     if on_progress is None:
         return
     fraction = max(0.0, min(1.0, float(fraction)))
@@ -102,6 +107,7 @@ def _check_cancel(should_cancel: CancelCheck | None) -> None:
 # --------------------------------------------------------------------------
 # multi-singer model
 # --------------------------------------------------------------------------
+
 
 class MedleyVox(BaseEncoderMaskerDecoder):
     """MedleyVox conv_tasnet_stft wrapper with mixture-consistent output."""
@@ -153,19 +159,31 @@ def ensure_model(model_dir: Path) -> Path:
 def load_model(model_dir: Path, device: str) -> MedleyVox:
     ckpt = ensure_model(model_dir)
     encoder, decoder = make_enc_dec(
-        "torch_stft", n_filters=2048, kernel_size=2048, stride=512,
+        "torch_stft",
+        n_filters=2048,
+        kernel_size=2048,
+        stride=512,
         sample_rate=SR,
     )
     masker = TDConvNet(
-        in_chan=encoder.n_feats_out, n_src=2, out_chan=None,
-        n_blocks=6, n_repeats=4, bn_chan=256, hid_chan=1024,
-        skip_chan=256, mask_act="linear",
+        in_chan=encoder.n_feats_out,
+        n_src=2,
+        out_chan=None,
+        n_blocks=6,
+        n_repeats=4,
+        bn_chan=256,
+        hid_chan=1024,
+        skip_chan=256,
+        mask_act="linear",
     )
     model = MedleyVox(encoder, masker, decoder).to(device).eval()
     state = torch.load(ckpt, map_location="cpu", weights_only=False)
     # use the EMA weights stored alongside the online weights
-    state = {k[len("ema_model.module."):]: v
-             for k, v in state.items() if k.startswith("ema_model.module.")}
+    state = {
+        k[len("ema_model.module.") :]: v
+        for k, v in state.items()
+        if k.startswith("ema_model.module.")
+    }
     model.load_state_dict(state, strict=True)
     return model
 
@@ -173,6 +191,7 @@ def load_model(model_dir: Path, device: str) -> MedleyVox:
 # --------------------------------------------------------------------------
 # audio helpers
 # --------------------------------------------------------------------------
+
 
 def load_audio(path: Path) -> tuple[torch.Tensor, int]:
     audio, sr = sf.read(str(path), dtype="float32", always_2d=True)
@@ -183,6 +202,7 @@ def resample(x: torch.Tensor, sr_in: int, sr_out: int) -> torch.Tensor:
     if sr_in == sr_out:
         return x
     import torchaudio.functional as AF
+
     return AF.resample(x, sr_in, sr_out)
 
 
@@ -206,17 +226,28 @@ def median_f0(x: np.ndarray, sr: int, max_seconds: float = 15.0) -> float | None
     if mono.size > max_seconds * sr:
         win = int(max_seconds * sr)
         step = int(5 * sr)
-        energies = [np.mean(mono[i:i + win] ** 2)
-                    for i in range(0, max(1, mono.size - win), step)]
+        energies = [
+            np.mean(mono[i : i + win] ** 2)
+            for i in range(0, max(1, mono.size - win), step)
+        ]
         start = int(np.argmax(energies)) * step
-        mono = mono[start:start + win]
+        mono = mono[start : start + win]
     try:
         import torchaudio.functional as AF
+
         wav = torch.from_numpy(mono).float().unsqueeze(0)
-        f0 = AF.detect_pitch_frequency(
-            wav, sr, frame_time=0.02, win_length=40,
-            freq_low=60, freq_high=1200,
-        ).squeeze(0).numpy()
+        f0 = (
+            AF.detect_pitch_frequency(
+                wav,
+                sr,
+                frame_time=0.02,
+                win_length=40,
+                freq_low=60,
+                freq_high=1200,
+            )
+            .squeeze(0)
+            .numpy()
+        )
         f0 = f0[f0 > 0]
         return float(np.median(f0)) if f0.size else None
     except Exception:
@@ -227,11 +258,16 @@ def median_f0(x: np.ndarray, sr: int, max_seconds: float = 15.0) -> float | None
 # Demucs stems
 # --------------------------------------------------------------------------
 
-def get_stems(input_path: Path, outdir: Path, model_name: str, device: str,
-              reuse: bool,
-              on_progress: ProgressCallback | None = None,
-              should_cancel: CancelCheck | None = None,
-              ) -> tuple[torch.Tensor, torch.Tensor, int]:
+
+def get_stems(
+    input_path: Path,
+    outdir: Path,
+    model_name: str,
+    device: str,
+    reuse: bool,
+    on_progress: ProgressCallback | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, int]:
     stem_dir = outdir / "stems"
     vocals_path = stem_dir / "vocals.wav"
     instru_path = stem_dir / "instrumental.wav"
@@ -244,10 +280,18 @@ def get_stems(input_path: Path, outdir: Path, model_name: str, device: str,
         return vocals, instru, sr
 
     from demucs.api import Separator
+
     stem_dir.mkdir(parents=True, exist_ok=True)
     _emit(on_progress, "demucs", 0.0, f"Loading Demucs '{model_name}'")
-    sep = Separator(model=model_name, device=device, shifts=1, overlap=0.25,
-                    split=True, progress=False, callback=None)
+    sep = Separator(
+        model=model_name,
+        device=device,
+        shifts=1,
+        overlap=0.25,
+        split=True,
+        progress=False,
+        callback=None,
+    )
 
     segment_seconds = getattr(sep.model, "segment", None) or 7.8
     segment_frames = max(1, int(segment_seconds * sep.samplerate))
@@ -256,11 +300,17 @@ def get_stems(input_path: Path, outdir: Path, model_name: str, device: str,
         _check_cancel(should_cancel)
         length = max(1, int(info.get("audio_length") or 1))
         offset = int(info.get("segment_offset") or 0)
-        done = offset + (segment_frames if info.get("state") == "end"
-                         else segment_frames / 2)
-        _emit(on_progress, "demucs", min(1.0, done / length),
-              "Separating vocals and instrumental",
-              segment_offset=offset, audio_length=length)
+        done = offset + (
+            segment_frames if info.get("state") == "end" else segment_frames / 2
+        )
+        _emit(
+            on_progress,
+            "demucs",
+            min(1.0, done / length),
+            "Separating vocals and instrumental",
+            segment_offset=offset,
+            audio_length=length,
+        )
 
     sep.update_parameter(callback=demucs_progress)
     _emit(on_progress, "demucs", 0.0, "Separating vocals and instrumental")
@@ -292,6 +342,7 @@ def get_stems(input_path: Path, outdir: Path, model_name: str, device: str,
 # chunked separation
 # --------------------------------------------------------------------------
 
+
 def _align(est: np.ndarray, prev_tail: np.ndarray | None) -> np.ndarray:
     """Keep singer identity consistent across chunks."""
     if prev_tail is None or prev_tail.shape[1] == 0:
@@ -307,12 +358,16 @@ def _align(est: np.ndarray, prev_tail: np.ndarray | None) -> np.ndarray:
     return est
 
 
-def separate_singers(model: MedleyVox, wav: torch.Tensor, sr: int,
-                     chunk_seconds: float, overlap_seconds: float,
-                     device: str,
-                     on_progress: ProgressCallback | None = None,
-                     should_cancel: CancelCheck | None = None,
-                     ) -> np.ndarray:
+def separate_singers(
+    model: MedleyVox,
+    wav: torch.Tensor,
+    sr: int,
+    chunk_seconds: float,
+    overlap_seconds: float,
+    device: str,
+    on_progress: ProgressCallback | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> np.ndarray:
     """Return (2, N) singers from a mono 24 kHz vocal stem."""
     _check_cancel(should_cancel)
     n = wav.numel()
@@ -356,10 +411,16 @@ def separate_singers(model: MedleyVox, wav: torch.Tensor, sr: int,
         done = i + 1
         elapsed = time.monotonic() - t0
         eta = (elapsed / done) * (total - done)
-        _emit(on_progress, "separator", done / total,
-              f"Separating singers (chunk {done}/{total})",
-              chunks_done=done, chunks_total=total,
-              elapsed_seconds=elapsed, eta_seconds=eta)
+        _emit(
+            on_progress,
+            "separator",
+            done / total,
+            f"Separating singers (chunk {done}/{total})",
+            chunks_done=done,
+            chunks_total=total,
+            elapsed_seconds=elapsed,
+            eta_seconds=eta,
+        )
         log(f"      chunk {done}/{total}  elapsed {elapsed:4.0f}s  eta {eta:4.0f}s")
 
     _check_cancel(should_cancel)
@@ -370,18 +431,22 @@ def separate_singers(model: MedleyVox, wav: torch.Tensor, sr: int,
 # full pipeline
 # --------------------------------------------------------------------------
 
-def run_pipeline(input_path: Path, outdir: Path, *,
-                 demucs_model: str = "htdemucs",
-                 device: str = "cpu",
-                 model_dir: Path | None = None,
-                 chunk_seconds: float = 10.0,
-                 overlap_seconds: float = 1.0,
-                 keep_stems: bool = False,
-                 threads: int | None = None,
-                 model: MedleyVox | None = None,
-                 on_progress: ProgressCallback | None = None,
-                 should_cancel: CancelCheck | None = None,
-                 ) -> dict[str, Any]:
+
+def run_pipeline(
+    input_path: Path,
+    outdir: Path,
+    *,
+    demucs_model: str = "htdemucs",
+    device: str = "cpu",
+    model_dir: Path | None = None,
+    chunk_seconds: float = 10.0,
+    overlap_seconds: float = 1.0,
+    keep_stems: bool = False,
+    threads: int | None = None,
+    model: MedleyVox | None = None,
+    on_progress: ProgressCallback | None = None,
+    should_cancel: CancelCheck | None = None,
+) -> dict[str, Any]:
     """Run the full separation pipeline.
 
     ``on_progress`` is called from the worker thread with a dict containing
@@ -392,8 +457,11 @@ def run_pipeline(input_path: Path, outdir: Path, *,
     t0 = time.time()
     input_path = Path(input_path)
     outdir = Path(outdir)
-    model_dir = Path(model_dir) if model_dir is not None else (
-        Path(__file__).resolve().parent / "models")
+    model_dir = (
+        Path(model_dir)
+        if model_dir is not None
+        else (Path(__file__).resolve().parent / "models")
+    )
     outdir.mkdir(parents=True, exist_ok=True)
 
     if threads:
@@ -402,8 +470,13 @@ def run_pipeline(input_path: Path, outdir: Path, *,
 
     _emit(on_progress, "prepare", 0.0, "Preparing")
     vocals, instru, sr = get_stems(
-        input_path.resolve(), outdir, demucs_model, device,
-        reuse=True, on_progress=on_progress, should_cancel=should_cancel,
+        input_path.resolve(),
+        outdir,
+        demucs_model,
+        device,
+        reuse=True,
+        on_progress=on_progress,
+        should_cancel=should_cancel,
     )
 
     _check_cancel(should_cancel)
@@ -414,10 +487,16 @@ def run_pipeline(input_path: Path, outdir: Path, *,
 
     _check_cancel(should_cancel)
     vocals_24k = resample(vocals.mean(dim=0, keepdim=True), sr, SR)
-    singers = separate_singers(model, vocals_24k.squeeze(0), SR,
-                               chunk_seconds, overlap_seconds, device,
-                               on_progress=on_progress,
-                               should_cancel=should_cancel)
+    singers = separate_singers(
+        model,
+        vocals_24k.squeeze(0),
+        SR,
+        chunk_seconds,
+        overlap_seconds,
+        device,
+        on_progress=on_progress,
+        should_cancel=should_cancel,
+    )
 
     _check_cancel(should_cancel)
     _emit(on_progress, "writing", 0.0, "Writing tracks")
@@ -437,7 +516,7 @@ def run_pipeline(input_path: Path, outdir: Path, *,
 
     for i in range(singers.shape[0]):
         _check_cancel(should_cancel)
-        voice = singers[i:i + 1]
+        voice = singers[i : i + 1]
         base = f"singer_{i + 1}"
         write_wav(outdir / f"{base}.wav", voice, SR)
         entry = {"file": f"{base}.wav", "rms": round(rms(voice), 5)}
@@ -445,8 +524,10 @@ def run_pipeline(input_path: Path, outdir: Path, *,
         if f0:
             entry["median_f0_hz"] = round(f0, 1)
         meta["singers"].append(entry)
-        log(f"      {base}: rms={entry['rms']:.4f}"
-            + (f", median f0={f0:.1f} Hz" if f0 else ""))
+        log(
+            f"      {base}: rms={entry['rms']:.4f}"
+            + (f", median f0={f0:.1f} Hz" if f0 else "")
+        )
 
     if not keep_stems:
         for p in (outdir / "stems").glob("*"):
@@ -462,6 +543,7 @@ def run_pipeline(input_path: Path, outdir: Path, *,
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
+
 
 class _CliProgress:
     def __init__(self) -> None:
@@ -498,22 +580,46 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     ap.add_argument("input", type=Path, help="audio file (mp3/wav/flac/opus/...)")
-    ap.add_argument("-o", "--outdir", type=Path, default=None,
-                    help="output directory (default: output/<track>)")
-    ap.add_argument("-n", "--demucs-model", default="htdemucs",
-                    help="Demucs model: htdemucs, htdemucs_ft, mdx_extra_q, ...")
+    ap.add_argument(
+        "-o",
+        "--outdir",
+        type=Path,
+        default=None,
+        help="output directory (default: output/<track>)",
+    )
+    ap.add_argument(
+        "-n",
+        "--demucs-model",
+        default="htdemucs",
+        help="Demucs model: htdemucs, htdemucs_ft, mdx_extra_q, ...",
+    )
     ap.add_argument("--device", default="cpu", choices=["cpu", "cuda"])
-    ap.add_argument("--model-dir", type=Path,
-                    default=Path(__file__).resolve().parent / "models")
-    ap.add_argument("--chunk-seconds", type=float, default=10.0,
-                    help="separator chunk length (0 = one pass)")
-    ap.add_argument("--overlap-seconds", type=float, default=1.0,
-                    help="overlap between separator chunks")
+    ap.add_argument(
+        "--model-dir", type=Path, default=Path(__file__).resolve().parent / "models"
+    )
+    ap.add_argument(
+        "--chunk-seconds",
+        type=float,
+        default=10.0,
+        help="separator chunk length (0 = one pass)",
+    )
+    ap.add_argument(
+        "--overlap-seconds",
+        type=float,
+        default=1.0,
+        help="overlap between separator chunks",
+    )
     ap.add_argument("--threads", type=int, default=max(1, (os.cpu_count() or 4) - 1))
-    ap.add_argument("--no-reuse", action="store_true",
-                    help="re-run Demucs even if cached stems exist")
-    ap.add_argument("--keep-stems", action="store_true",
-                    help="keep the 44.1 kHz vocal/instrumental stems")
+    ap.add_argument(
+        "--no-reuse",
+        action="store_true",
+        help="re-run Demucs even if cached stems exist",
+    )
+    ap.add_argument(
+        "--keep-stems",
+        action="store_true",
+        help="keep the 44.1 kHz vocal/instrumental stems",
+    )
     args = ap.parse_args()
 
     if not args.input.exists():
@@ -534,7 +640,8 @@ def main() -> None:
             (outdir / "stems" / name).unlink(missing_ok=True)
 
     meta = run_pipeline(
-        args.input, outdir,
+        args.input,
+        outdir,
         demucs_model=args.demucs_model,
         device=args.device,
         model_dir=args.model_dir,
