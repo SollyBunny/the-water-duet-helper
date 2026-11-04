@@ -60,10 +60,10 @@ async function loadPeaks(track) {
 }
 
 async function loadTracks() {
-    const res = await fetch("./index.json");
+    const res = await fetch("./data/index.json");
     tracks = Object.entries((await res.json()).files).map(([name, path]) => ({
         name,
-        path,
+        path: "./data/" + path,
     }));
 
     const fragment = document.createDocumentFragment();
@@ -119,7 +119,7 @@ async function loadTracks() {
 
 
 async function loadLyrics() {
-    const res = await fetch("./lyrics.txt");
+    const res = await fetch("./data/lyrics.txt");
     const text = await res.text();
 
     const fragment = document.createDocumentFragment();
