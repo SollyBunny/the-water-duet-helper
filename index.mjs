@@ -4,7 +4,10 @@
  *   canvas: HTMLCanvasElement,
  *   context: CanvasRenderingContext2D,
  *   head: HTMLDivElement,
- *   audio: HTMLAudioElement,
+ *   volume: number,
+ *   buffer: AudioBuffer | null,
+ *   gain: GainNode | null,
+ *   source: AudioBufferSourceNode | null,
  *   peaks: Float32Array | null,
  * }} Track
  */
@@ -12,7 +15,7 @@
 /** @type {Track[]} */
 const tracks = [];
 
-// Used only to decode audio for the waveforms; playback goes through the media elements.
+// A single audio clock drives every track, so they cannot drift apart.
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
 const tracksEl = document.getElementById("tracks");
@@ -20,9 +23,15 @@ const playButton = document.getElementById("player-button");
 const seekSlider = document.getElementById("player-seek");
 const timeEl = document.getElementById("player-time");
 
+/** Small head start so every source can be scheduled on the same clock tick. */
+const START_DELAY = 0.05;
+
 let duration = 0;
 let playing = false;
-/** Playback position while paused, and where playback starts from. */
+let starting = false;
+/** Audio-context time at which playback was scheduled to start. */
+let startedAt = 0;
+/** Position playback starts from, and the position while paused. */
 let offset = 0;
 let frame = 0;
 
@@ -98,64 +107,84 @@ function drawPeaks(track) {
 }
 
 function updateDuration() {
-    duration = tracks.reduce((max, track) => {
-        const trackDuration = track.audio.duration;
-        return Number.isFinite(trackDuration) ? Math.max(max, trackDuration) : max;
-    }, 0);
+    duration = tracks.reduce((max, track) => Math.max(max, track.buffer?.duration ?? 0), 0);
 }
 
 /**
- * Fetch and decode a track purely to draw its waveform. Playback uses the
- * audio element directly, and the decoded buffer is released once the peaks
- * are computed.
+ * Fetch and decode a track. The decoded buffer is reused for both the waveform
+ * and playback; if playback is already running the track joins in sync.
  *
  * @param {Track} track
  */
-async function loadWaveform(track) {
+async function loadTrack(track) {
     const res = await fetch(track.path);
+
     const buffer = await audioContext.decodeAudioData(await res.arrayBuffer());
+
+    const gain = audioContext.createGain();
+    gain.gain.value = track.volume;
+    gain.connect(audioContext.destination);
+
+    track.buffer = buffer;
+    track.gain = gain;
     track.peaks = computePeaks(buffer);
+
+    updateDuration();
     drawPeaks(track);
-}
 
-/**
- * Resolve once the audio element has metadata (duration), without waiting for
- * the audio itself to load.
- *
- * @param {Track} track
- */
-function loadTrackMetadata(track) {
-    const { audio } = track;
-    if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) return Promise.resolve();
+    if (playing) startTrack(track, Math.max(audioContext.currentTime + START_DELAY, startedAt));
 
-    return new Promise((resolve) => {
-        audio.addEventListener("loadedmetadata", resolve, { once: true });
-    });
+    playButton.disabled = false;
+    seekSlider.disabled = false;
+    updateButton();
+    render();
 }
 
 function currentTime() {
     if (!playing) return offset;
-    // The longest track drives the playhead; shorter tracks stop at their end.
-    return Math.min(duration, Math.max(0, ...tracks.map((track) => track.audio.currentTime || 0)));
+    // Every source runs off this same clock, so they stay in sync by design.
+    return Math.min(duration, offset + Math.max(0, audioContext.currentTime - startedAt));
 }
 
-/** @param {number} time */
-function setPositions(time) {
+function stopSources() {
     for (const track of tracks) {
-        const { audio } = track;
-        if (!Number.isFinite(audio.duration)) continue;
-        audio.currentTime = clamp(time, 0, audio.duration);
+        if (!track.source) continue;
+        try {
+            track.source.stop();
+        } catch (_) {}
+        track.source.disconnect();
+        track.source = null;
     }
+}
+
+/**
+ * Schedule a track's buffer against the shared clock. `position` is derived
+ * from the global timeline so a track that finishes decoding mid-playback
+ * starts at exactly the right sample.
+ *
+ * @param {Track} track
+ * @param {number} startAt Audio-context time to begin playing.
+ */
+function startTrack(track, startAt) {
+    const { buffer, gain } = track;
+    if (!buffer || !gain) return;
+
+    const position = offset + (startAt - startedAt);
+    if (position < 0 || position >= buffer.duration) return;
+
+    const source = audioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(gain);
+    source.start(startAt, position);
+    track.source = source;
 }
 
 /** @param {number} [at] Position to settle on; defaults to the current playback time. */
 function pause(at = currentTime()) {
     offset = at;
     playing = false;
+    stopSources();
     cancelAnimationFrame(frame);
-    for (const track of tracks) {
-        track.audio.pause();
-    }
     updateButton();
     render();
 }
@@ -167,15 +196,23 @@ function updateButton() {
 
 /** @param {number} time */
 function seek(time) {
-    offset = clamp(time, 0, duration);
+    const at = clamp(time, 0, duration);
 
-    if (offset >= duration) {
+    if (at >= duration) {
         pause(duration);
         return;
     }
 
-    setPositions(offset);
-    render();
+    offset = at;
+
+    if (playing) {
+        // Restart every source together at the new position.
+        playing = false;
+        cancelAnimationFrame(frame);
+        play();
+    } else {
+        render();
+    }
 }
 
 function render() {
@@ -202,18 +239,28 @@ function tick() {
     frame = requestAnimationFrame(tick);
 }
 
-function play() {
-    if (playing || duration <= 0) return;
+async function play() {
+    if (playing || starting || duration <= 0) return;
 
+    // After reaching the end, Play starts over from the beginning.
     if (offset >= duration) offset = 0;
-    setPositions(offset);
+
+    starting = true;
+    try {
+        await audioContext.resume();
+    } finally {
+        starting = false;
+    }
+
+    stopSources();
+
+    const startAt = audioContext.currentTime + START_DELAY;
+    startedAt = startAt;
     playing = true;
     updateButton();
     cancelAnimationFrame(frame);
 
-    for (const track of tracks) {
-        track.audio.play();
-    }
+    for (const track of tracks) startTrack(track, startAt);
 
     tick();
 }
@@ -293,23 +340,23 @@ async function loadTracks() {
         elHead.classList.add("track-playhead");
         elWave.append(elHead);
 
-        const audio = new Audio();
-        audio.preload = "metadata";
-        audio.src = path;
-
         /** @type {Track} */
         const track = {
             path,
             canvas: elPeaks,
             context: elPeaks.getContext("2d"),
             head: elHead,
-            audio,
+            volume: 1,
+            buffer: null,
+            gain: null,
+            source: null,
             peaks: null,
         };
         tracks.push(track);
 
         elVolume.addEventListener("input", () => {
-            audio.volume = Number(elVolume.value) / 100;
+            track.volume = Number(elVolume.value) / 100;
+            if (track.gain) track.gain.gain.value = track.volume;
         });
 
         let elWavePressed = false;
@@ -348,18 +395,10 @@ async function loadTracks() {
 
     tracksEl.replaceChildren(fragment);
 
-    await Promise.all(tracks.map(loadTrackMetadata));
-    updateDuration();
-
-    playButton.disabled = false;
-    seekSlider.disabled = false;
-    updateButton();
-    render();
-
-    // Waveform buffers are only needed for the canvases, so decode them in the
-    // background instead of blocking playback on the whole files.
+    // Decode in the background. The page stays usable and tracks join playback
+    // as soon as their buffer is ready.
     for (const track of tracks) {
-        loadWaveform(track);
+        loadTrack(track)
     }
 }
 
