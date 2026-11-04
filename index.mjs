@@ -225,9 +225,25 @@ playButton.addEventListener("click", () => {
         play();
 });
 
+let resumeAfterSeek = undefined;
 seekSlider.addEventListener("input", () => {
+    if (resumeAfterSeek === undefined) {
+        if (playing) {
+            resumeAfterSeek = true;
+            pause();
+        } else {
+            resumeAfterSeek = false;
+        }
+    }
     seek(Number(seekSlider.value) / Number(seekSlider.max) * duration);
 });
+
+seekSlider.addEventListener("change", () => {
+    if (resumeAfterSeek) {
+        play();
+    }
+    resumeAfterSeek = undefined;
+})
 
 async function loadTracks() {
     const res = await fetch("./data/index.json");
@@ -296,10 +312,36 @@ async function loadTracks() {
             audio.volume = Number(elVolume.value) / 100;
         });
 
-        elWave.addEventListener("click", (event) => {
+        let elWavePressed = false;
+        let elWaveResumeAfterSeek = false;
+        function waveSeek(event) {
             const rect = elWave.getBoundingClientRect();
             seek(((event.clientX - rect.left) / rect.width) * duration);
+        }
+        function waveSeekEnd(event) {
+            elWave.releasePointerCapture(event.pointerId);
+            elWavePressed = false;
+            if (elWaveResumeAfterSeek) {
+                play();
+            }
+        }
+        elWave.addEventListener("pointerdown", (event) => {
+            elWave.setPointerCapture(event.pointerId);
+            if (playing) {
+                elWaveResumeAfterSeek = playing;
+                pause();
+            } else {
+                elWaveResumeAfterSeek = false;
+            }
+            elWavePressed = true;
+            waveSeek(event);
         });
+        elWave.addEventListener("pointermove", (event) => {
+            if (!elWavePressed) return;
+            waveSeek(event);
+        });
+        elWave.addEventListener("pointerup", waveSeekEnd);
+        elWave.addEventListener("pointercancel", waveSeekEnd);
 
         fragment.append(row);
     }
